@@ -84,9 +84,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     # Create contract instance
     contract = w3.eth.contract(address=contract_address, abi=contract_abi)
     
-    # Get current block number and calculate range (last 5 blocks)
+    # Get current block number and calculate range
+    # Scan more blocks to ensure we catch recent events
     current_block = w3.eth.get_block_number()
-    start_block = max(0, current_block - 4)  # Last 5 blocks
+    start_block = max(0, current_block - 14)  # Last 15 blocks for safety
     end_block = current_block
     
     print(f"Scanning blocks {start_block} to {end_block} on {chain} chain")
@@ -95,19 +96,26 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     if chain == 'source':
         # Look for Deposit events on source chain
         try:
-            # Scan block by block for better reliability
-            events = []
-            for block_num in range(start_block, end_block + 1):
-                try:
-                    event_filter = contract.events.Deposit.create_filter(
-                        fromBlock=block_num,
-                        toBlock=block_num
-                    )
-                    block_events = event_filter.get_all_entries()
-                    events.extend(block_events)
-                except Exception as e:
-                    # Continue if a specific block fails
-                    continue
+            # Try to get events in one call first (more efficient)
+            try:
+                event_filter = contract.events.Deposit.create_filter(
+                    fromBlock=start_block,
+                    toBlock=end_block
+                )
+                events = event_filter.get_all_entries()
+            except:
+                # If that fails, scan block by block
+                events = []
+                for block_num in range(start_block, end_block + 1):
+                    try:
+                        event_filter = contract.events.Deposit.create_filter(
+                            fromBlock=block_num,
+                            toBlock=block_num
+                        )
+                        block_events = event_filter.get_all_entries()
+                        events.extend(block_events)
+                    except:
+                        continue
             
             print(f"Found {len(events)} Deposit events on source chain")
             
@@ -163,19 +171,26 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     elif chain == 'destination':
         # Look for Unwrap events on destination chain
         try:
-            # Scan block by block for better reliability
-            events = []
-            for block_num in range(start_block, end_block + 1):
-                try:
-                    event_filter = contract.events.Unwrap.create_filter(
-                        fromBlock=block_num,
-                        toBlock=block_num
-                    )
-                    block_events = event_filter.get_all_entries()
-                    events.extend(block_events)
-                except Exception as e:
-                    # Continue if a specific block fails
-                    continue
+            # Try to get events in one call first (more efficient)
+            try:
+                event_filter = contract.events.Unwrap.create_filter(
+                    fromBlock=start_block,
+                    toBlock=end_block
+                )
+                events = event_filter.get_all_entries()
+            except:
+                # If that fails, scan block by block
+                events = []
+                for block_num in range(start_block, end_block + 1):
+                    try:
+                        event_filter = contract.events.Unwrap.create_filter(
+                            fromBlock=block_num,
+                            toBlock=block_num
+                        )
+                        block_events = event_filter.get_all_entries()
+                        events.extend(block_events)
+                    except:
+                        continue
             
             print(f"Found {len(events)} Unwrap events on destination chain")
             
