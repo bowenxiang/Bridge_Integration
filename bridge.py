@@ -55,6 +55,17 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     try:
         with open('secret_key.txt', 'r') as f:
             private_key = f.read().strip()
+    except FileNotFoundError:
+        # Try alternative path in case running from different directory
+        try:
+            import os
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            key_path = os.path.join(script_dir, 'secret_key.txt')
+            with open(key_path, 'r') as f:
+                private_key = f.read().strip()
+        except Exception as e:
+            print(f"Failed to read private key: {e}")
+            return 0
     except Exception as e:
         print(f"Failed to read private key: {e}")
         return 0
@@ -84,11 +95,19 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     if chain == 'source':
         # Look for Deposit events on source chain
         try:
-            event_filter = contract.events.Deposit.create_filter(
-                fromBlock=start_block,
-                toBlock=end_block
-            )
-            events = event_filter.get_all_entries()
+            # Scan block by block for better reliability
+            events = []
+            for block_num in range(start_block, end_block + 1):
+                try:
+                    event_filter = contract.events.Deposit.create_filter(
+                        fromBlock=block_num,
+                        toBlock=block_num
+                    )
+                    block_events = event_filter.get_all_entries()
+                    events.extend(block_events)
+                except Exception as e:
+                    # Continue if a specific block fails
+                    continue
             
             print(f"Found {len(events)} Deposit events on source chain")
             
@@ -144,11 +163,19 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     elif chain == 'destination':
         # Look for Unwrap events on destination chain
         try:
-            event_filter = contract.events.Unwrap.create_filter(
-                fromBlock=start_block,
-                toBlock=end_block
-            )
-            events = event_filter.get_all_entries()
+            # Scan block by block for better reliability
+            events = []
+            for block_num in range(start_block, end_block + 1):
+                try:
+                    event_filter = contract.events.Unwrap.create_filter(
+                        fromBlock=block_num,
+                        toBlock=block_num
+                    )
+                    block_events = event_filter.get_all_entries()
+                    events.extend(block_events)
+                except Exception as e:
+                    # Continue if a specific block fails
+                    continue
             
             print(f"Found {len(events)} Unwrap events on destination chain")
             
