@@ -138,7 +138,11 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
             # Sign and Send
             signed_tx = target_w3.eth.account.sign_transaction(tx, YOUR_PRIVATE_KEY)
-            tx_hash = target_w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            
+            # Handle both Web3.py v5 (rawTransaction) and v6 (raw_transaction)
+            raw_tx = getattr(signed_tx, 'raw_transaction', None) or getattr(signed_tx, 'rawTransaction', None)
+            
+            tx_hash = target_w3.eth.send_raw_transaction(raw_tx)
             print(f"Transaction sent: {tx_hash.hex()}")
             
             # Increment nonce
