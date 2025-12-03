@@ -77,9 +77,9 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     scan_contract = scan_w3.eth.contract(address=scan_info['address'], abi=scan_info['abi'])
     target_contract = target_w3.eth.contract(address=target_info['address'], abi=target_info['abi'])
 
-    # 4. Scan Block Range (Last 5 blocks)
+    # 4. Scan Block Range (Last 20 blocks to ensure we catch all events)
     current_block = scan_w3.eth.block_number
-    start_block = current_block - 5
+    start_block = current_block - 20
     print(f"Scanning {chain} chain: Blocks {start_block} to {current_block} for {event_name} events.")
     
     # Filter for events
