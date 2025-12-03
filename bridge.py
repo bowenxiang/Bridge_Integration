@@ -3,7 +3,6 @@ from web3.providers.rpc import HTTPProvider
 from web3.middleware import ExtraDataToPOAMiddleware #Necessary for POA chains
 from datetime import datetime
 import json
-import pandas as pd
 import sys
 
 def connect_to(chain):
@@ -50,14 +49,12 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     # TODO: ENTER YOUR PRIVATE KEY HERE
     # This key must correspond to the address that has the WARDEN_ROLE on the contracts
     # and has funds (AVAX/BNB) on both chains to pay for gas.
-    # The autograder will use this key to sign the transactions.
     YOUR_PRIVATE_KEY = "bf05816aa7637bb6bd8e7decf92a7cc6b8ff5f2251cd0454ffb6b61809d59336"
 
     # 1. Setup connections and info
     scan_w3 = connect_to(chain)
     scan_info = get_contract_info(chain, contract_info)
 
-    # Determine the target chain based on the scan chain
     if chain == 'source':
         target_chain = 'destination'
         event_name = 'Deposit'
@@ -86,14 +83,23 @@ def scan_blocks(chain, contract_info="contract_info.json"):
     print(f"Scanning {chain} chain: Blocks {start_block} to {current_block} for {event_name} events.")
     
     # Filter for events
-    events = scan_contract.events[event_name].create_filter(fromBlock=start_block, toBlock=current_block).get_all_entries()
+    try:
+        # Try Web3.py v6 syntax (snake_case)
+        events_filter = scan_contract.events[event_name].create_filter(from_block=start_block, to_block=current_block)
+        events = events_filter.get_all_entries()
+    except TypeError:
+        # Fallback to Web3.py v5 syntax (camelCase)
+        events_filter = scan_contract.events[event_name].create_filter(fromBlock=start_block, toBlock=current_block)
+        events = events_filter.get_all_entries()
+    except Exception as e:
+        print(f"Error creating filter: {e}")
+        return
     
     if not events:
         print("No events found.")
         return
 
     # 5. Process Events and Send Transactions
-    # Get initial nonce for the target chain
     nonce = target_w3.eth.get_transaction_count(my_address)
     
     for event in events:
@@ -103,8 +109,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             
             tx = None
             if chain == 'source': 
-                # Found Deposit on Source -> Call wrap on Destination
-                # Deposit(token, recipient, amount) -> wrap(underlying_token, recipient, amount)
+                # Deposit -> wrap
                 token = args['token']
                 recipient = args['recipient']
                 amount = args['amount']
@@ -118,8 +123,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 })
                 
             else: 
-                # Found Unwrap on Destination -> Call withdraw on Source
-                # Unwrap(underlying_token, wrapped_token, frm, to, amount) -> withdraw(token, recipient, amount)
+                # Unwrap -> withdraw
                 underlying_token = args['underlying_token']
                 to = args['to']
                 amount = args['amount']
@@ -137,7 +141,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             tx_hash = target_w3.eth.send_raw_transaction(signed_tx.rawTransaction)
             print(f"Transaction sent: {tx_hash.hex()}")
             
-            # Increment nonce for next iteration
+            # Increment nonce
             nonce += 1
             
         except Exception as e:
