@@ -4,7 +4,7 @@ from web3.middleware import ExtraDataToPOAMiddleware #Necessary for POA chains
 from datetime import datetime
 import json
 import pandas as pd
-
+import sys
 
 def connect_to(chain):
     if chain == 'source':  # The source contract chain is avax
@@ -17,8 +17,8 @@ def connect_to(chain):
         w3 = Web3(Web3.HTTPProvider(api_url))
         # inject the poa compatibility middleware to the innermost layer
         w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
-    return w3
-
+        return w3
+    return None
 
 def get_contract_info(chain, contract_info):
     """
@@ -45,131 +45,100 @@ def scan_blocks(chain, contract_info="contract_info.json"):
 
     if chain not in ['source','destination']:
         print( f"Invalid chain: {chain}" )
-        return 0
-    
-    # 1. Connect to the chain being scanned
-    w3 = connect_to(chain)
-    
-    # 2. Load the private key (Warden)
-    try:
-        with open('secret_key.txt', 'r') as f:
-            private_key = f.read().strip()
-    except FileNotFoundError:
-        # Fallback for different directory structures
-        try:
-            import os
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            key_path = os.path.join(script_dir, 'secret_key.txt')
-            with open(key_path, 'r') as f:
-                private_key = f.read().strip()
-        except Exception as e:
-            print(f"Failed to read private key: {e}")
-            return 0
+        return
 
-    account = w3.eth.account.from_key(private_key)
-    
-    # 3. Get contract info for the chain being scanned
-    contract_details = get_contract_info(chain, contract_info)
-    contract_address = contract_details['address']
-    contract_abi = contract_details['abi']
-    contract = w3.eth.contract(address=contract_address, abi=contract_abi)
-    
-    # 4. Define Block Range (Look back 5 blocks)
-    # We must look back in history to find those transactions.
-    latest_block = w3.eth.block_number
-    start_block = latest_block - 5
-    end_block = latest_block
-    
-    print(f"Scanning blocks {start_block} to {end_block} on {chain} chain")
-    
-    # 5. Scan for events
+    # TODO: ENTER YOUR PRIVATE KEY HERE
+    # This key must correspond to the address that has the WARDEN_ROLE on the contracts
+    # and has funds (AVAX/BNB) on both chains to pay for gas.
+    # The autograder will use this key to sign the transactions.
+    YOUR_PRIVATE_KEY = "bf05816aa7637bb6bd8e7decf92a7cc6b8ff5f2251cd0454ffb6b61809d59336"
+
+    # 1. Setup connections and info
+    scan_w3 = connect_to(chain)
+    scan_info = get_contract_info(chain, contract_info)
+
+    # Determine the target chain based on the scan chain
     if chain == 'source':
-        # --- Source Chain: Look for DEPOSIT events ---
+        target_chain = 'destination'
+        event_name = 'Deposit'
+    else:
+        target_chain = 'source'
+        event_name = 'Unwrap'
+        
+    target_w3 = connect_to(target_chain)
+    target_info = get_contract_info(target_chain, contract_info)
+
+    # 2. Validate Private Key and Setup Account
+    try:
+        account = target_w3.eth.account.from_key(YOUR_PRIVATE_KEY)
+        my_address = account.address
+    except Exception as e:
+        print(f"Error loading private key: {e}")
+        return
+
+    # 3. Setup Contracts
+    scan_contract = scan_w3.eth.contract(address=scan_info['address'], abi=scan_info['abi'])
+    target_contract = target_w3.eth.contract(address=target_info['address'], abi=target_info['abi'])
+
+    # 4. Scan Block Range (Last 5 blocks)
+    current_block = scan_w3.eth.block_number
+    start_block = current_block - 5
+    print(f"Scanning {chain} chain: Blocks {start_block} to {current_block} for {event_name} events.")
+    
+    # Filter for events
+    events = scan_contract.events[event_name].create_filter(fromBlock=start_block, toBlock=current_block).get_all_entries()
+    
+    if not events:
+        print("No events found.")
+        return
+
+    # 5. Process Events and Send Transactions
+    # Get initial nonce for the target chain
+    nonce = target_w3.eth.get_transaction_count(my_address)
+    
+    for event in events:
         try:
-            # Use get_logs for reliable historical lookup
-            events = contract.events.Deposit.get_logs(fromBlock=start_block, toBlock=end_block)
+            print(f"Found event in tx: {event['transactionHash'].hex()}")
+            args = event['args']
             
-            print(f"Found {len(events)} Deposit events on source chain")
-            
-            if len(events) > 0:
-                # Connect to DESTINATION to execute Wrap
-                dest_w3 = connect_to('destination')
-                dest_details = get_contract_info('destination', contract_info)
-                dest_contract = dest_w3.eth.contract(address=dest_details['address'], abi=dest_details['abi'])
+            tx = None
+            if chain == 'source': 
+                # Found Deposit on Source -> Call wrap on Destination
+                # Deposit(token, recipient, amount) -> wrap(underlying_token, recipient, amount)
+                token = args['token']
+                recipient = args['recipient']
+                amount = args['amount']
                 
-                for evt in events:
-                    # Extract args
-                    token = evt.args['token']
-                    recipient = evt.args['recipient']
-                    amount = evt.args['amount']
-                    
-                    print(f"Processing Deposit: token={token}, recipient={recipient}, amount={amount}")
-                    
-                    # Prepare Transaction
-                    nonce = dest_w3.eth.get_transaction_count(account.address)
-                    txn = dest_contract.functions.wrap(
-                        token, 
-                        recipient, 
-                        amount
-                    ).build_transaction({
-                        'from': account.address,
-                        'nonce': nonce,
-                        # Gas settings can be adjusted if needed
-                        'gasPrice': dest_w3.eth.gas_price
-                    })
-                    
-                    # Sign and Send
-                    signed_txn = dest_w3.eth.account.sign_transaction(txn, private_key)
-                    tx_hash = dest_w3.eth.send_raw_transaction(signed_txn.raw_transaction)
-                    
-                    print(f"Wrap transaction sent: {tx_hash.hex()}")
-                    
-                    # Wait for receipt, slows down execution but confirms success
-                    dest_w3.eth.wait_for_transaction_receipt(tx_hash)
-
-        except Exception as e:
-            print(f"Error processing source events: {e}")
-
-    elif chain == 'destination':
-        # --- Destination Chain: Look for UNWRAP events ---
-        try:
-            # Use get_logs for reliable historical lookup
-            events = contract.events.Unwrap.get_logs(fromBlock=start_block, toBlock=end_block)
-            
-            print(f"Found {len(events)} Unwrap events on destination chain")
-            
-            if len(events) > 0:
-                # Connect to SOURCE to execute Withdraw
-                src_w3 = connect_to('source')
-                src_details = get_contract_info('source', contract_info)
-                src_contract = src_w3.eth.contract(address=src_details['address'], abi=src_details['abi'])
+                print(f"Processing Deposit: {amount} of {token} to {recipient}")
                 
-                for evt in events:
-                    # Extract args
-                    underlying_token = evt.args['underlying_token']
-                    recipient = evt.args['to']
-                    amount = evt.args['amount']
-                    
-                    print(f"Processing Unwrap: token={underlying_token}, recipient={recipient}, amount={amount}")
-                    
-                    # Prepare Transaction
-                    nonce = src_w3.eth.get_transaction_count(account.address)
-                    txn = src_contract.functions.withdraw(
-                        underlying_token, 
-                        recipient, 
-                        amount
-                    ).build_transaction({
-                        'from': account.address,
-                        'nonce': nonce,
-                        'gasPrice': src_w3.eth.gas_price
-                    })
-                    
-                    # Sign and Send
-                    signed_txn = src_w3.eth.account.sign_transaction(txn, private_key)
-                    tx_hash = src_w3.eth.send_raw_transaction(signed_txn.raw_transaction)
-                    
-                    print(f"Withdraw transaction sent: {tx_hash.hex()}")
-                    src_w3.eth.wait_for_transaction_receipt(tx_hash)
+                tx = target_contract.functions.wrap(token, recipient, amount).build_transaction({
+                    'from': my_address,
+                    'nonce': nonce,
+                    'gasPrice': target_w3.eth.gas_price
+                })
+                
+            else: 
+                # Found Unwrap on Destination -> Call withdraw on Source
+                # Unwrap(underlying_token, wrapped_token, frm, to, amount) -> withdraw(token, recipient, amount)
+                underlying_token = args['underlying_token']
+                to = args['to']
+                amount = args['amount']
+                
+                print(f"Processing Unwrap: {amount} of {underlying_token} to {to}")
 
+                tx = target_contract.functions.withdraw(underlying_token, to, amount).build_transaction({
+                    'from': my_address,
+                    'nonce': nonce,
+                    'gasPrice': target_w3.eth.gas_price
+                })
+
+            # Sign and Send
+            signed_tx = target_w3.eth.account.sign_transaction(tx, YOUR_PRIVATE_KEY)
+            tx_hash = target_w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            print(f"Transaction sent: {tx_hash.hex()}")
+            
+            # Increment nonce for next iteration
+            nonce += 1
+            
         except Exception as e:
-            print(f"Error processing destination events: {e}")
+            print(f"Error processing event: {e}")
